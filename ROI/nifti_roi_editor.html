@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NIfTI ROI Editor</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pako/2.1.0/pako.min.js"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+  :root {
+    --bg-primary: #0a0e17; --bg-secondary: #111827; --bg-tertiary: #1a2235;
+    --bg-panel: #151d2e; --accent: #00d4aa; --accent-dim: #00d4aa33;
+    --warn: #ff6b6b; --warn-dim: #ff6b6b33;
+    --text-primary: #e8ecf4; --text-secondary: #8892a8; --text-dim: #4a5568; --border: #1e293b;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family:'Outfit',sans-serif; background:var(--bg-primary); color:var(--text-primary); min-height:100vh; overflow-x:hidden; }
+  .app-header { display:flex; align-items:center; justify-content:space-between; padding:12px 24px; background:var(--bg-secondary); border-bottom:1px solid var(--border); }
+  .app-title { font-size:18px; font-weight:600; display:flex; align-items:center; gap:10px; }
+  .app-title .icon { width:28px; height:28px; background:var(--accent); border-radius:6px; display:flex; align-items:center; justify-content:center; font-size:14px; color:var(--bg-primary); font-weight:700; }
+  .header-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  button { font-family:'Outfit',sans-serif; cursor:pointer; border:none; border-radius:6px; font-size:13px; font-weight:500; padding:8px 16px; transition:all .15s; }
+  .btn-primary { background:var(--accent); color:var(--bg-primary); }
+  .btn-primary:hover { filter:brightness(1.15); }
+  .btn-primary:disabled { opacity:.4; cursor:not-allowed; }
+  .btn-secondary { background:var(--bg-tertiary); color:var(--text-primary); border:1px solid var(--border); }
+  .btn-secondary:hover { background:#232d42; }
+  .btn-danger { background:var(--warn-dim); color:var(--warn); border:1px solid transparent; }
+  .btn-danger:hover { background:#ff6b6b44; }
+  .main-layout { display:grid; grid-template-columns:280px 1fr; height:calc(100vh - 53px); }
+  .sidebar { background:var(--bg-panel); border-right:1px solid var(--border); overflow-y:auto; padding:16px; display:flex; flex-direction:column; gap:14px; }
+  .panel { background:var(--bg-secondary); border:1px solid var(--border); border-radius:8px; overflow:hidden; }
+  .panel-header { padding:10px 14px; font-size:11px; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text-secondary); border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; }
+  .panel-body { padding:12px 14px; }
+  .info-row { display:flex; justify-content:space-between; align-items:center; padding:3px 0; font-size:12px; }
+  .info-row .label { color:var(--text-secondary); }
+  .info-row .value { font-family:'JetBrains Mono',monospace; font-size:11px; }
+  .control-group { display:flex; flex-direction:column; gap:5px; }
+  .control-label { font-size:12px; color:var(--text-secondary); display:flex; justify-content:space-between; }
+  .control-label .val { font-family:'JetBrains Mono',monospace; color:var(--accent); font-size:11px; }
+  input[type="range"] { -webkit-appearance:none; width:100%; height:4px; border-radius:2px; background:var(--bg-tertiary); outline:none; }
+  input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:var(--accent); cursor:pointer; border:2px solid var(--bg-primary); }
+  .tool-buttons { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+  .tool-btn { padding:8px 10px; font-size:12px; border-radius:6px; background:var(--bg-tertiary); color:var(--text-secondary); border:1px solid transparent; text-align:center; }
+  .tool-btn.active { background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
+  .tool-btn:hover { background:#232d42; }
+  .cmap-buttons { display:grid; grid-template-columns:1fr 1fr; gap:5px; margin-top:4px; }
+  .cmap-btn { display:flex; align-items:center; gap:6px; padding:5px 8px; font-size:11px; border-radius:5px; background:var(--bg-tertiary); color:var(--text-secondary); border:1px solid transparent; cursor:pointer; }
+  .cmap-btn.active { background:var(--accent-dim); color:var(--accent); border-color:var(--accent); }
+  .cmap-btn:hover { background:#232d42; }
+  .cmap-preview { display:inline-block; width:32px; height:8px; border-radius:2px; flex-shrink:0; }
+  .cmap-gray { background:linear-gradient(to right,#000,#fff); }
+  .cmap-hot { background:linear-gradient(to right,#000,#c00,#f80,#ff0,#fff); }
+  .cmap-cool { background:linear-gradient(to right,#000,#00c,#0ff,#fff); }
+  .cmap-viridis { background:linear-gradient(to right,#440154,#3b528b,#21918c,#5ec962,#fde725); }
+  .roi-item { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; font-size:12px; cursor:pointer; }
+  .roi-item:hover { background:var(--bg-tertiary); }
+  .roi-item.active { background:var(--accent-dim); }
+  .roi-color { width:12px; height:12px; border-radius:3px; flex-shrink:0; }
+  .roi-name { flex:1; }
+  .roi-count { font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-dim); }
+  .add-roi-btn { width:100%; padding:6px; font-size:12px; border-radius:6px; background:transparent; color:var(--accent); border:1px dashed var(--accent-dim); margin-top:6px; }
+  .add-roi-btn:hover { background:var(--accent-dim); }
+  .canvas-area { display:flex; flex-direction:column; background:var(--bg-primary); overflow:hidden; }
+  .views-grid { flex:1; display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:2px; padding:2px; min-height:0; }
+  .view-panel { background:#000; position:relative; overflow:hidden; display:flex; align-items:center; justify-content:center; border-radius:4px; }
+  .view-label { position:absolute; top:8px; left:10px; font-size:11px; font-weight:600; color:var(--accent); text-transform:uppercase; letter-spacing:.1em; z-index:2; text-shadow:0 1px 4px rgba(0,0,0,.8); }
+  .view-coords { position:absolute; bottom:8px; left:10px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--text-secondary); z-index:2; text-shadow:0 1px 4px rgba(0,0,0,.8); }
+  .slice-nav { position:absolute; right:8px; top:50%; transform:translateY(-50%); display:flex; flex-direction:column; gap:4px; z-index:2; }
+  .slice-nav button { width:24px; height:24px; padding:0; font-size:14px; background:rgba(0,0,0,.6); color:var(--text-secondary); border-radius:4px; display:flex; align-items:center; justify-content:center; }
+  .slice-nav button:hover { background:rgba(0,0,0,.8); color:var(--text-primary); }
+  canvas.slice-canvas { image-rendering:pixelated; cursor:crosshair; }
+  .info-panel-view { display:flex; flex-direction:column; align-items:center; justify-content:center; background:var(--bg-secondary); gap:12px; padding:20px; }
+  .crosshair-info { text-align:center; font-family:'JetBrains Mono',monospace; }
+  .crosshair-info .coord { font-size:24px; font-weight:600; color:var(--accent); }
+  .crosshair-info .voxel-val { font-size:13px; color:var(--text-secondary); margin-top:4px; }
+  .dropzone { position:absolute; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:16px; z-index:10; background:var(--bg-primary); }
+  .dropzone-box { border:2px dashed var(--accent-dim); border-radius:16px; padding:60px 80px; text-align:center; transition:all .2s; }
+  .dropzone-box.dragover { border-color:var(--accent); background:var(--accent-dim); }
+  .dropzone-icon { font-size:48px; margin-bottom:12px; opacity:.6; }
+  .dropzone-text { font-size:16px; font-weight:500; margin-bottom:4px; }
+  .dropzone-sub { font-size:13px; color:var(--text-secondary); }
+  .template-section { margin-top:24px; text-align:center; }
+  .template-divider { display:flex; align-items:center; gap:16px; margin-bottom:20px; }
+  .template-divider::before,.template-divider::after { content:''; flex:1; height:1px; background:var(--border); }
+  .template-divider span { font-size:12px; color:var(--text-dim); white-space:nowrap; }
+  .template-cards { display:flex; gap:12px; justify-content:center; }
+  .template-card { background:var(--bg-secondary); border:1px solid var(--border); border-radius:12px; padding:20px 24px; cursor:pointer; transition:all .2s; text-align:center; min-width:180px; font-family:'Outfit',sans-serif; color:var(--text-primary); }
+  .template-card:hover { border-color:var(--accent); background:var(--bg-tertiary); transform:translateY(-2px); box-shadow:0 4px 20px rgba(0,212,170,.1); }
+  .template-card-icon { font-size:32px; margin-bottom:8px; }
+  .template-card-title { font-size:14px; font-weight:600; margin-bottom:4px; }
+  .template-card-desc { font-size:11px; color:var(--text-secondary); line-height:1.5; }
+  .loading-overlay { position:fixed; inset:0; background:rgba(10,14,23,.85); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:100; gap:16px; }
+  .loading-spinner { width:40px; height:40px; border:3px solid var(--border); border-top-color:var(--accent); border-radius:50%; animation:spin .8s linear infinite; }
+  @keyframes spin { to { transform:rotate(360deg); } }
+  .loading-text { font-size:14px; color:var(--text-secondary); }
+  .layer-badge { display:inline-block; padding:2px 6px; border-radius:3px; font-size:9px; font-weight:600; text-transform:uppercase; letter-spacing:.05em; }
+  .badge-bg { background:#374151; color:#9ca3af; }
+  .badge-ov { background:#7c3aed33; color:#a78bfa; }
+  .layer-row { display:flex; align-items:center; gap:8px; padding:6px 8px; border-radius:6px; font-size:12px; margin-bottom:4px; background:var(--bg-tertiary); }
+  .layer-row .layer-name { flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .layer-row .layer-status { font-size:10px; color:var(--text-dim); font-family:'JetBrains Mono',monospace; }
+  .status-bar { padding:6px 16px; font-size:11px; font-family:'JetBrains Mono',monospace; color:var(--text-dim); background:var(--bg-secondary); border-top:1px solid var(--border); display:flex; justify-content:space-between; }
+  .hidden { display:none !important; }
+  ::-webkit-scrollbar { width:6px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:var(--border); border-radius:3px; }
+</style>
+</head>
+<body>
+<div class="app-header">
+  <div class="app-title"><div class="icon">R</div>NIfTI ROI Editor</div>
+  <div class="header-actions">
+    <button class="btn-secondary" onclick="loadMNI152()">MNI152 Template</button>
+    <button class="btn-secondary" onclick="pickFile('bg')">Open Background</button>
+    <button class="btn-secondary" onclick="pickFile('ov')">Add Overlay</button>
+    <input type="file" id="fileInput" accept=".nii,.nii.gz,.gz" style="display:none">
+    <button class="btn-primary" id="exportBtn" disabled onclick="exportROI()">Export ROI (.nii.gz)</button>
+  </div>
+</div>
+<div class="main-layout">
+  <div class="sidebar">
+    <div class="panel">
+      <div class="panel-header">Layers</div>
+      <div class="panel-body">
+        <div class="layer-row"><span class="layer-badge badge-bg">BG</span><span class="layer-name" id="bgName">No background</span><span class="layer-status" id="bgDims">—</span></div>
+        <div class="layer-row"><span class="layer-badge badge-ov">OV</span><span class="layer-name" id="ovName">No overlay</span><span class="layer-status" id="ovDims">—</span></div>
+      </div>
+    </div>
+    <div class="panel" id="overlayControlsPanel" style="display:none">
+      <div class="panel-header">Overlay Display</div>
+      <div class="panel-body" style="display:flex;flex-direction:column;gap:10px">
+        <div class="control-group">
+          <div class="control-label"><span>Colormap</span></div>
+          <div class="cmap-buttons">
+            <button class="cmap-btn active" data-cmap="hot" onclick="setOvCmap('hot')"><span class="cmap-preview cmap-hot"></span>Hot</button>
+            <button class="cmap-btn" data-cmap="cool" onclick="setOvCmap('cool')"><span class="cmap-preview cmap-cool"></span>Cool</button>
+            <button class="cmap-btn" data-cmap="viridis" onclick="setOvCmap('viridis')"><span class="cmap-preview cmap-viridis"></span>Viridis</button>
+            <button class="cmap-btn" data-cmap="gray" onclick="setOvCmap('gray')"><span class="cmap-preview cmap-gray"></span>Gray</button>
+          </div>
+        </div>
+        <div class="control-group">
+          <div class="control-label"><span>Overlay Opacity</span><span class="val" id="ovOpVal">70%</span></div>
+          <input type="range" id="ovOpSlider" min="0" max="100" value="70" oninput="ovOpacity=this.value/100;document.getElementById('ovOpVal').textContent=this.value+'%';redrawAll()">
+        </div>
+        <div class="control-group">
+          <div class="control-label"><span>Threshold Min</span><span class="val" id="thMinVal">0</span></div>
+          <input type="range" id="thMinSlider" min="0" max="1000" value="0" step="1" oninput="updateThresh()">
+        </div>
+        <div class="control-group">
+          <div class="control-label"><span>Threshold Max</span><span class="val" id="thMaxVal">100</span></div>
+          <input type="range" id="thMaxSlider" min="0" max="1000" value="1000" step="1" oninput="updateThresh()">
+        </div>
+        <button class="btn-secondary" style="font-size:11px;padding:5px 10px" onclick="removeOverlay()">Remove Overlay</button>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">Background Display</div>
+      <div class="panel-body">
+        <div class="control-group">
+          <div class="control-label"><span>Brightness</span><span class="val" id="brtVal">100%</span></div>
+          <input type="range" id="brtSlider" min="20" max="400" value="100" oninput="redrawAll()">
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">ROI Tools</div>
+      <div class="panel-body">
+        <div class="tool-buttons">
+          <button class="tool-btn active" data-tool="paint" onclick="setTool('paint')">&#9998; Paint</button>
+          <button class="tool-btn" data-tool="erase" onclick="setTool('erase')">&#9003; Erase</button>
+          <button class="tool-btn" data-tool="fill" onclick="setTool('fill')">&#9635; Fill Slice</button>
+          <button class="tool-btn" data-tool="sphere" onclick="setTool('sphere')">&#9673; Sphere</button>
+        </div>
+        <div style="height:10px"></div>
+        <div class="control-group">
+          <div class="control-label"><span>Brush Size</span><span class="val" id="brSzVal">1</span></div>
+          <input type="range" id="brSzSlider" min="1" max="15" value="1" oninput="brushSize=+this.value;document.getElementById('brSzVal').textContent=this.value">
+        </div>
+        <div style="height:6px"></div>
+        <div class="control-group">
+          <div class="control-label"><span>ROI Opacity</span><span class="val" id="roiOpVal">50%</span></div>
+          <input type="range" id="roiOpSlider" min="10" max="100" value="50" oninput="roiOpacity=this.value/100;document.getElementById('roiOpVal').textContent=this.value+'%';redrawAll()">
+        </div>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">ROI Regions<span id="totalVoxels" style="font-size:10px;font-family:'JetBrains Mono',monospace;color:var(--accent)">0 vox</span></div>
+      <div class="panel-body"><div id="roiList"></div><button class="add-roi-btn" onclick="addROI()">+ Add Region</button></div>
+    </div>
+    <div class="panel">
+      <div class="panel-header">Actions</div>
+      <div class="panel-body" style="display:flex;flex-direction:column;gap:6px">
+        <button class="btn-secondary" onclick="undoAction()" id="undoBtn" disabled>Undo (Ctrl+Z)</button>
+        <button class="btn-danger" onclick="clearCurrentROI()">Clear Current ROI</button>
+        <button class="btn-danger" onclick="clearAllROIs()">Clear All ROIs</button>
+      </div>
+    </div>
+  </div>
+  <div class="canvas-area" id="canvasArea">
+    <div class="dropzone" id="dropzone">
+      <div class="dropzone-box" id="dropzoneBox">
+        <div class="dropzone-icon">&#129504;</div>
+        <div class="dropzone-text">Drop a .nii.gz file here</div>
+        <div class="dropzone-sub">or use the buttons above</div>
+      </div>
+      <div class="template-section">
+        <div class="template-divider"><span>quick start</span></div>
+        <div class="template-cards">
+          <button class="template-card" onclick="loadMNI152()">
+            <div class="template-card-icon">&#129504;</div>
+            <div class="template-card-title">MNI152 Template</div>
+            <div class="template-card-desc">Load standard 2mm T1<br>as background underlay</div>
+          </button>
+          <button class="template-card" onclick="pickFile('bg')">
+            <div class="template-card-icon">&#128194;</div>
+            <div class="template-card-title">Custom Background</div>
+            <div class="template-card-desc">Load your own .nii.gz<br>as background</div>
+          </button>
+        </div>
+      </div>
+    </div>
+    <div class="views-grid hidden" id="viewsGrid">
+      <div class="view-panel" id="axialPanel"><span class="view-label">Axial (Z)</span><canvas class="slice-canvas" id="axialCanvas"></canvas><span class="view-coords" id="axialCoords"></span><div class="slice-nav"><button onclick="changeSlice('axial',1)">&#9650;</button><button onclick="changeSlice('axial',-1)">&#9660;</button></div></div>
+      <div class="view-panel" id="coronalPanel"><span class="view-label">Coronal (Y)</span><canvas class="slice-canvas" id="coronalCanvas"></canvas><span class="view-coords" id="coronalCoords"></span><div class="slice-nav"><button onclick="changeSlice('coronal',1)">&#9650;</button><button onclick="changeSlice('coronal',-1)">&#9660;</button></div></div>
+      <div class="view-panel" id="sagittalPanel"><span class="view-label">Sagittal (X)</span><canvas class="slice-canvas" id="sagittalCanvas"></canvas><span class="view-coords" id="sagittalCoords"></span><div class="slice-nav"><button onclick="changeSlice('sagittal',1)">&#9650;</button><button onclick="changeSlice('sagittal',-1)">&#9660;</button></div></div>
+      <div class="view-panel info-panel-view">
+        <div class="crosshair-info">
+          <div class="coord" id="crossCoord">—</div>
+          <div class="voxel-val" id="crossVal">Load a volume</div>
+          <div class="voxel-val" id="crossOvVal"></div>
+        </div>
+        <div style="font-size:12px;color:var(--text-dim);text-align:center;max-width:220px;line-height:1.5">
+          Click any view to set crosshair.<br>Use <b style="color:var(--accent)">Add Overlay</b> to load a stat map on top.
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="status-bar"><span id="statusMsg">Ready — load a background or template</span><span id="statusRight"></span></div>
+
+<script>
+// ==================== NIfTI Parser ====================
+function parseNIfTI(buffer) {
+  const dv = new DataView(buffer);
+  const sh = dv.getInt32(0,true);
+  let le = true;
+  if (sh!==348&&sh!==540) le=false;
+  const n2 = sh===540;
+  let dims,dt,bp,vo,pd,sf;
+  if (!n2) {
+    dims=[]; for(let i=0;i<=7;i++) dims.push(dv.getInt16(40+i*2,le));
+    dt=dv.getInt16(70,le); bp=dv.getInt16(72,le); vo=dv.getFloat32(108,le);
+    pd=[]; for(let i=0;i<=7;i++) pd.push(dv.getFloat32(76+i*4,le));
+    sf=[]; for(let r=0;r<4;r++){sf.push([]); for(let c=0;c<4;c++) sf[r].push(r<3?dv.getFloat32(280+r*16+c*4,le):(r===c?1:0));}
+  } else {
+    dims=[]; for(let i=0;i<=7;i++) dims.push(Number(dv.getBigInt64(16+i*8,le)));
+    dt=dv.getInt16(12,le); bp=dv.getInt16(14,le); vo=Number(dv.getBigInt64(168,le));
+    pd=[]; for(let i=0;i<=7;i++) pd.push(dv.getFloat64(80+i*8,le));
+    sf=[[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+  }
+  const nx=dims[1],ny=dims[2],nz=dims[3],nv=nx*ny*nz,off=Math.round(vo);
+  let data;
+  switch(dt){
+    case 2: data=new Float32Array(new Uint8Array(buffer,off,nv)); break;
+    case 4: data=new Float32Array(nv); for(let i=0;i<nv;i++) data[i]=dv.getInt16(off+i*2,le); break;
+    case 8: data=new Float32Array(nv); for(let i=0;i<nv;i++) data[i]=dv.getInt32(off+i*4,le); break;
+    case 16: data=new Float32Array(nv); for(let i=0;i<nv;i++) data[i]=dv.getFloat32(off+i*4,le); break;
+    case 64: data=new Float32Array(nv); for(let i=0;i<nv;i++) data[i]=dv.getFloat64(off+i*8,le); break;
+    case 256: data=new Float32Array(new Int8Array(buffer,off,nv)); break;
+    case 512: data=new Float32Array(nv); for(let i=0;i<nv;i++) data[i]=dv.getUint16(off+i*2,le); break;
+    default: data=new Float32Array(nv); for(let i=0;i<nv;i++) data[i]=dv.getFloat32(off+i*4,le);
+  }
+  let ss=dv.getFloat32(112,le), si=dv.getFloat32(116,le);
+  if(ss!==0&&!(ss===1&&si===0)) for(let i=0;i<nv;i++) data[i]=data[i]*ss+si;
+  let mn=Infinity,mx=-Infinity;
+  for(let i=0;i<nv;i++){if(data[i]<mn)mn=data[i];if(data[i]>mx)mx=data[i];}
+  return {dims,pixdims:pd,datatype:dt,bitpix:bp,nx,ny,nz,nvox:nv,data,vox_offset:off,sform:sf,dataMin:mn,dataMax:mx,headerBytes:new Uint8Array(buffer,0,off),littleEndian:le};
+}
+
+// ==================== Colormaps ====================
+function buildLUT(fn){const l=new Uint8Array(768);for(let i=0;i<256;i++){const c=fn(i/255);l[i*3]=c[0];l[i*3+1]=c[1];l[i*3+2]=c[2];}return l;}
+const LUTS={
+  hot:buildLUT(t=>{if(t<.33){const s=t/.33;return[s*255,0,0];}if(t<.66){const s=(t-.33)/.33;return[255,s*255,0];}const s=(t-.66)/.34;return[255,255,s*255];}),
+  cool:buildLUT(t=>{if(t<.33)return[0,0,t/.33*255];if(t<.66){const s=(t-.33)/.33;return[0,s*255,255];}const s=(t-.66)/.34;return[s*255,255,255];}),
+  viridis:buildLUT(t=>{const S=[[0,68,1,84],[.25,59,82,139],[.5,33,145,140],[.75,94,201,98],[1,253,231,37]];let a,b;for(let k=0;k<S.length-1;k++)if(t>=S[k][0]&&t<=S[k+1][0]){a=S[k];b=S[k+1];break;}if(!a){a=S[3];b=S[4];}const f=(t-a[0])/(b[0]-a[0]);return[a[1]+(b[1]-a[1])*f,a[2]+(b[2]-a[2])*f,a[3]+(b[3]-a[3])*f];})
+};
+function cmapRGB(name,v){v=Math.max(0,Math.min(255,Math.round(v)));if(name==='gray')return[v,v,v];const l=LUTS[name];return[l[v*3],l[v*3+1],l[v*3+2]];}
+
+// ==================== State ====================
+let bgNii=null, ovNii=null, roiData=null, crosshair=[0,0,0];
+let currentTool='paint', brushSize=1, roiOpacity=.5, ovOpacity=.7, ovCmap='hot';
+let ovThMin=0, ovThMax=Infinity;
+let undoStack=[], MAX_UNDO=30;
+const ROI_COLORS=['#00d4aa','#ff6b6b','#4dabf7','#ffd43b','#da77f2','#ff922b','#69db7c','#f783ac','#74c0fc','#a9e34b'];
+let rois=[{name:'ROI-1',label:1,color:ROI_COLORS[0]}], activeROI=0;
+
+// ==================== File handling ====================
+let filePurpose='bg';
+const fileInput=document.getElementById('fileInput');
+function pickFile(p){filePurpose=p;fileInput.click();}
+fileInput.addEventListener('change',e=>{if(e.target.files.length)loadFile(e.target.files[0],filePurpose);e.target.value='';});
+
+const dzBox=document.getElementById('dropzoneBox');
+document.addEventListener('dragover',e=>{e.preventDefault();if(dzBox)dzBox.classList.add('dragover');});
+document.addEventListener('dragleave',()=>{if(dzBox)dzBox.classList.remove('dragover');});
+document.addEventListener('drop',e=>{e.preventDefault();if(dzBox)dzBox.classList.remove('dragover');if(e.dataTransfer.files.length)loadFile(e.dataTransfer.files[0],bgNii?'ov':'bg');});
+
+function decomp(buf){const a=new Uint8Array(buf);return(a[0]===0x1f&&a[1]===0x8b)?pako.inflate(a).buffer:buf;}
+
+function loadFile(file,purpose){
+  setStatus('Loading '+file.name+'...');
+  const reader=new FileReader();
+  reader.onload=function(e){
+    try{
+      const vol=parseNIfTI(decomp(e.target.result));
+      if(purpose==='bg')loadAsBg(vol,file.name);else loadAsOv(vol,file.name);
+    }catch(err){setStatus('Error: '+err.message);console.error(err);}
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+function loadAsBg(vol,name){
+  bgNii=vol;
+  roiData=new Uint8Array(vol.nvox);
+  crosshair=[Math.floor(vol.nx/2),Math.floor(vol.ny/2),Math.floor(vol.nz/2)];
+  undoStack=[];document.getElementById('undoBtn').disabled=true;
+  document.getElementById('dropzone').classList.add('hidden');
+  document.getElementById('viewsGrid').classList.remove('hidden');
+  document.getElementById('exportBtn').disabled=false;
+  document.getElementById('bgName').textContent=name;
+  document.getElementById('bgDims').textContent=vol.nx+'×'+vol.ny+'×'+vol.nz;
+  setupCanvases();redrawAll();renderROIList();
+  setStatus(name+' loaded as background — '+vol.nx+'×'+vol.ny+'×'+vol.nz);
+}
+
+// ==================== Affine math for resampling ====================
+function mat4inv(m){
+  // Invert a 4x4 matrix (array of 4 arrays of 4)
+  const a=m[0][0],b=m[0][1],c=m[0][2],d=m[0][3],
+        e=m[1][0],f=m[1][1],g=m[1][2],h=m[1][3],
+        i=m[2][0],j=m[2][1],k=m[2][2],l=m[2][3],
+        M=m[3][0],N=m[3][1],O=m[3][2],P=m[3][3];
+  const det=a*(f*(k*P-l*O)-g*(j*P-l*N)+h*(j*O-k*N))
+           -b*(e*(k*P-l*O)-g*(i*P-l*M)+h*(i*O-k*M))
+           +c*(e*(j*P-l*N)-f*(i*P-l*M)+h*(i*N-j*M))
+           -d*(e*(j*O-k*N)-f*(i*O-k*M)+g*(i*N-j*M));
+  if(Math.abs(det)<1e-12) return null;
+  const id=1/det;
+  const r=[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+  r[0][0]=(f*(k*P-l*O)-g*(j*P-l*N)+h*(j*O-k*N))*id;
+  r[0][1]=(-(b*(k*P-l*O)-c*(j*P-l*N)+d*(j*O-k*N)))*id;
+  r[0][2]=(b*(g*P-h*O)-c*(f*P-h*N)+d*(f*O-g*N))*id;
+  r[0][3]=(-(b*(g*l-h*k)-c*(f*l-h*j)+d*(f*k-g*j)))*id;
+  r[1][0]=(-(e*(k*P-l*O)-g*(i*P-l*M)+h*(i*O-k*M)))*id;
+  r[1][1]=(a*(k*P-l*O)-c*(i*P-l*M)+d*(i*O-k*M))*id;
+  r[1][2]=(-(a*(g*P-h*O)-c*(e*P-h*M)+d*(e*O-g*M)))*id;
+  r[1][3]=(a*(g*l-h*k)-c*(e*l-h*i)+d*(e*k-g*i))*id;
+  r[2][0]=(e*(j*P-l*N)-f*(i*P-l*M)+h*(i*N-j*M))*id;
+  r[2][1]=(-(a*(j*P-l*N)-b*(i*P-l*M)+d*(i*N-j*M)))*id;
+  r[2][2]=(a*(f*P-h*N)-b*(e*P-h*M)+d*(e*N-f*M))*id;
+  r[2][3]=(-(a*(f*l-h*j)-b*(e*l-h*i)+d*(e*j-f*i)))*id;
+  r[3][0]=(-(e*(j*O-k*N)-f*(i*O-k*M)+g*(i*N-j*M)))*id;
+  r[3][1]=(a*(j*O-k*N)-b*(i*O-k*M)+c*(i*N-j*M))*id;
+  r[3][2]=(-(a*(f*O-g*N)-b*(e*O-g*M)+c*(e*N-f*M)))*id;
+  r[3][3]=(a*(f*k-g*j)-b*(e*k-g*i)+c*(e*j-f*i))*id;
+  return r;
+}
+
+function mat4mul(A,B){
+  const r=[[0,0,0,0],[0,0,0,0],[0,0,0,0],[0,0,0,0]];
+  for(let i=0;i<4;i++)for(let j=0;j<4;j++)for(let k=0;k<4;k++) r[i][j]+=A[i][k]*B[k][j];
+  return r;
+}
+
+function affineApply(M,x,y,z){
+  return [M[0][0]*x+M[0][1]*y+M[0][2]*z+M[0][3],
+          M[1][0]*x+M[1][1]*y+M[1][2]*z+M[1][3],
+          M[2][0]*x+M[2][1]*y+M[2][2]*z+M[2][3]];
+}
+
+// Check if sform looks valid (not all zeros)
+function sformValid(sf){
+  for(let r=0;r<3;r++)for(let c=0;c<4;c++)if(Math.abs(sf[r][c])>1e-6)return true;
+  return false;
+}
+
+// Build a fallback sform from pixdims (assumes identity orientation)
+function sformFromPixdims(vol){
+  return [
+    [vol.pixdims[1]||1, 0, 0, 0],
+    [0, vol.pixdims[2]||1, 0, 0],
+    [0, 0, vol.pixdims[3]||1, 0],
+    [0, 0, 0, 1]
+  ];
+}
+
+function resampleOverlay(ovVol, bgVol){
+  // Compute transform: bg_voxel -> world -> ov_voxel
+  // world = bgSform * bg_voxel
+  // ov_voxel = ovSform_inv * world
+  // combined = ovSform_inv * bgSform
+  const bgSf = sformValid(bgVol.sform) ? bgVol.sform : sformFromPixdims(bgVol);
+  const ovSf = sformValid(ovVol.sform) ? ovVol.sform : sformFromPixdims(ovVol);
+  const ovSfInv = mat4inv(ovSf);
+  if(!ovSfInv){
+    console.warn('Cannot invert overlay sform, skipping resample');
+    return null;
+  }
+  const T = mat4mul(ovSfInv, bgSf); // bg_ijk -> ov_ijk
+
+  const nv = bgVol.nvox;
+  const out = new Float32Array(nv);
+  const onx=ovVol.nx, ony=ovVol.ny, onz=ovVol.nz;
+  const bnx=bgVol.nx, bny=bgVol.ny;
+  let mn=Infinity, mx=-Infinity;
+
+  for(let bz=0; bz<bgVol.nz; bz++){
+    for(let by=0; by<bgVol.ny; by++){
+      for(let bx=0; bx<bgVol.nx; bx++){
+        // Map bg voxel to overlay voxel
+        const [ox,oy,oz] = affineApply(T, bx, by, bz);
+        // Nearest-neighbor
+        const oxi=Math.round(ox), oyi=Math.round(oy), ozi=Math.round(oz);
+        let val=0;
+        if(oxi>=0&&oxi<onx&&oyi>=0&&oyi<ony&&ozi>=0&&ozi<onz){
+          val = ovVol.data[oxi + oyi*onx + ozi*onx*ony];
+        }
+        out[bx + by*bnx + bz*bnx*bny] = val;
+        if(val<mn)mn=val; if(val>mx)mx=val;
+      }
+    }
+  }
+
+  // Return a new vol object with bg dimensions but overlay data resampled
+  return {
+    dims: bgVol.dims.slice(), pixdims: bgVol.pixdims.slice(),
+    datatype: ovVol.datatype, bitpix: ovVol.bitpix,
+    nx: bgVol.nx, ny: bgVol.ny, nz: bgVol.nz, nvox: nv,
+    data: out, vox_offset: ovVol.vox_offset, sform: bgVol.sform,
+    dataMin: mn, dataMax: mx,
+    headerBytes: ovVol.headerBytes, littleEndian: ovVol.littleEndian
+  };
+}
+
+function loadAsOv(vol,name){
+  if(!bgNii){loadAsBg(vol,name);return;}
+
+  let finalVol = vol;
+  let resampled = false;
+
+  // If dimensions don't match, resample using affine
+  if(vol.nx!==bgNii.nx||vol.ny!==bgNii.ny||vol.nz!==bgNii.nz){
+    setStatus('Resampling overlay ('+vol.nx+'×'+vol.ny+'×'+vol.nz+') to background space ('+bgNii.nx+'×'+bgNii.ny+'×'+bgNii.nz+')...');
+    const rs = resampleOverlay(vol, bgNii);
+    if(!rs){
+      alert('Could not resample overlay — invalid affine transform.\nOverlay dims: '+vol.nx+'×'+vol.ny+'×'+vol.nz+'\nBackground dims: '+bgNii.nx+'×'+bgNii.ny+'×'+bgNii.nz);
+      setStatus('Overlay rejected — cannot resample');return;
+    }
+    finalVol = rs;
+    resampled = true;
+  }
+
+  ovNii=finalVol; ovThMin=finalVol.dataMin; ovThMax=finalVol.dataMax;
+  const mn=document.getElementById('thMinSlider'),mx=document.getElementById('thMaxSlider');
+  mn.min=Math.floor(finalVol.dataMin*100);mn.max=Math.ceil(finalVol.dataMax*100);mn.value=Math.floor(finalVol.dataMin*100);
+  mx.min=Math.floor(finalVol.dataMin*100);mx.max=Math.ceil(finalVol.dataMax*100);mx.value=Math.ceil(finalVol.dataMax*100);
+  document.getElementById('thMinVal').textContent=finalVol.dataMin.toFixed(2);
+  document.getElementById('thMaxVal').textContent=finalVol.dataMax.toFixed(2);
+  document.getElementById('overlayControlsPanel').style.display='';
+  document.getElementById('ovName').textContent=name+(resampled?' (resampled)':'');
+  document.getElementById('ovDims').textContent=finalVol.nx+'×'+finalVol.ny+'×'+finalVol.nz;
+  redrawAll();
+  const rsMsg = resampled ? ' (resampled from '+vol.nx+'×'+vol.ny+'×'+vol.nz+')' : '';
+  setStatus(name+' overlaid'+rsMsg+' — range: '+finalVol.dataMin.toFixed(2)+' to '+finalVol.dataMax.toFixed(2));
+}
+
+function removeOverlay(){
+  ovNii=null;document.getElementById('overlayControlsPanel').style.display='none';
+  document.getElementById('ovName').textContent='No overlay';document.getElementById('ovDims').textContent='—';
+  redrawAll();setStatus('Overlay removed');
+}
+
+function updateThresh(){
+  ovThMin=+document.getElementById('thMinSlider').value/100;
+  ovThMax=+document.getElementById('thMaxSlider').value/100;
+  document.getElementById('thMinVal').textContent=ovThMin.toFixed(2);
+  document.getElementById('thMaxVal').textContent=ovThMax.toFixed(2);
+  redrawAll();
+}
+
+// ==================== MNI152 ====================
+const MNI_URL='https://niivue.github.io/niivue-demo-images/mni152.nii.gz';
+function showLoad(m){let e=document.getElementById('loadOv');if(!e){e=document.createElement('div');e.id='loadOv';e.className='loading-overlay';e.innerHTML='<div class="loading-spinner"></div><div class="loading-text" id="loadTxt"></div>';document.body.appendChild(e);}document.getElementById('loadTxt').textContent=m||'Loading...';e.style.display='';}
+function hideLoad(){const e=document.getElementById('loadOv');if(e)e.style.display='none';}
+async function loadMNI152(){
+  showLoad('Downloading MNI152 template...');setStatus('Fetching MNI152...');
+  try{const r=await fetch(MNI_URL);if(!r.ok)throw new Error('HTTP '+r.status);
+    const vol=parseNIfTI(decomp(await r.arrayBuffer()));loadAsBg(vol,'MNI152 T1 (2mm)');hideLoad();
+  }catch(err){hideLoad();setStatus('Failed: '+err.message);alert('Could not download MNI152.\n\n'+MNI_URL+'\n\nDownload manually and use "Open Background".');}
+}
+
+// ==================== Canvas ====================
+const CVS={},CTX={},VIEWS=['axial','coronal','sagittal'];
+function vDims(v){if(!bgNii)return[0,0];switch(v){case'axial':return[bgNii.nx,bgNii.ny];case'coronal':return[bgNii.nx,bgNii.nz];case'sagittal':return[bgNii.ny,bgNii.nz];}}
+function setupCanvases(){
+  VIEWS.forEach(v=>{
+    const c=document.getElementById(v+'Canvas');CVS[v]=c;CTX[v]=c.getContext('2d');
+    const[w,h]=vDims(v);c.width=w;c.height=h;
+    const p=c.parentElement,pw=p.clientWidth-40,ph=p.clientHeight-40,s=Math.min(pw/w,ph/h,8);
+    c.style.width=(w*s)+'px';c.style.height=(h*s)+'px';
+    c.onmousedown=e=>onDown(v,e);c.onmousemove=e=>onMove(v,e);c.onmouseup=()=>{drawing=false;};
+    c.onwheel=e=>{e.preventDefault();changeSlice(v,e.deltaY>0?-1:1);};c.oncontextmenu=e=>e.preventDefault();
+  });
+}
+
+// ==================== Drawing ====================
+function idx(x,y,z,vol){return x+y*vol.nx+z*vol.nx*vol.ny;}
+function getBg(x,y,z){if(!bgNii||x<0||x>=bgNii.nx||y<0||y>=bgNii.ny||z<0||z>=bgNii.nz)return 0;return bgNii.data[idx(x,y,z,bgNii)];}
+function getOv(x,y,z){if(!ovNii||x<0||x>=ovNii.nx||y<0||y>=ovNii.ny||z<0||z>=ovNii.nz)return NaN;return ovNii.data[idx(x,y,z,ovNii)];}
+function getROI(x,y,z){if(!roiData||!bgNii||x<0||x>=bgNii.nx||y<0||y>=bgNii.ny||z<0||z>=bgNii.nz)return 0;return roiData[idx(x,y,z,bgNii)];}
+function setROI(x,y,z,val){if(!roiData||!bgNii||x<0||x>=bgNii.nx||y<0||y>=bgNii.ny||z<0||z>=bgNii.nz)return;roiData[idx(x,y,z,bgNii)]=val;}
+
+function redrawAll(){
+  if(!bgNii)return;
+  const brt=document.getElementById('brtSlider').value/100;
+  document.getElementById('brtVal').textContent=Math.round(brt*100)+'%';
+  VIEWS.forEach(v=>drawSlice(v,brt));
+  updateInfo();updateVoxCounts();
+}
+
+function drawSlice(view,brt){
+  const ctx=CTX[view],[w,h]=vDims(view),img=ctx.createImageData(w,h),px=img.data;
+  const bgR=bgNii.dataMax-bgNii.dataMin||1;
+  const hasOv=!!ovNii, ovR=hasOv?(ovNii.dataMax-ovNii.dataMin||1):1;
+
+  for(let j=0;j<h;j++){for(let i=0;i<w;i++){
+    let x,y,z;const jF=h-1-j;
+    switch(view){case'axial':x=i;y=jF;z=crosshair[2];break;case'coronal':x=i;y=crosshair[1];z=jF;break;case'sagittal':x=crosshair[0];y=i;z=jF;break;}
+
+    // Background: grayscale
+    let norm=((getBg(x,y,z)-bgNii.dataMin)/bgR)*255*brt;
+    norm=Math.max(0,Math.min(255,norm));
+    let r=norm,g=norm,b=norm;
+
+    // Overlay: colormap
+    if(hasOv){
+      const ov=getOv(x,y,z);
+      if(!isNaN(ov)&&ov>=ovThMin&&ov<=ovThMax){
+        const n=((ov-ovNii.dataMin)/ovR)*255;
+        const[cr,cg,cb]=cmapRGB(ovCmap,Math.max(0,Math.min(255,n)));
+        const a=ovOpacity;
+        r=r*(1-a)+cr*a; g=g*(1-a)+cg*a; b=b*(1-a)+cb*a;
+      }
+    }
+
+    // ROI on top
+    const rv=getROI(x,y,z);
+    if(rv>0){const roi=rois.find(rr=>rr.label===rv);if(roi){const c=hex2rgb(roi.color),a=roiOpacity;r=r*(1-a)+c.r*a;g=g*(1-a)+c.g*a;b=b*(1-a)+c.b*a;}}
+
+    const p4=(j*w+i)*4;px[p4]=r;px[p4+1]=g;px[p4+2]=b;px[p4+3]=255;
+
+    // Crosshair
+    let ch=false;
+    switch(view){case'axial':if(i===crosshair[0]||jF===crosshair[1])ch=true;break;case'coronal':if(i===crosshair[0]||jF===crosshair[2])ch=true;break;case'sagittal':if(i===crosshair[1]||jF===crosshair[2])ch=true;break;}
+    if(ch){px[p4]=Math.min(255,px[p4]+40);px[p4+1]=Math.min(255,px[p4+1]+80);px[p4+2]=Math.min(255,px[p4+2]+40);px[p4+3]=200;}
+  }}
+  ctx.putImageData(img,0,0);
+  const ce=document.getElementById(view+'Coords');
+  switch(view){case'axial':ce.textContent='Z='+crosshair[2];break;case'coronal':ce.textContent='Y='+crosshair[1];break;case'sagittal':ce.textContent='X='+crosshair[0];break;}
+}
+
+// ==================== Interaction ====================
+let drawing=false;
+function c2v(view,e){
+  const c=CVS[view],r=c.getBoundingClientRect();
+  const ci=Math.floor((e.clientX-r.left)*(c.width/r.width)),cj=Math.floor((e.clientY-r.top)*(c.height/r.height));
+  const[w,h]=vDims(view),jF=h-1-cj;
+  let x=crosshair[0],y=crosshair[1],z=crosshair[2];
+  switch(view){case'axial':x=ci;y=jF;break;case'coronal':x=ci;z=jF;break;case'sagittal':y=ci;z=jF;break;}
+  return[x,y,z];
+}
+function clampCH(x,y,z){return[Math.max(0,Math.min(bgNii.nx-1,x)),Math.max(0,Math.min(bgNii.ny-1,y)),Math.max(0,Math.min(bgNii.nz-1,z))];}
+function onDown(v,e){
+  e.preventDefault();crosshair=clampCH(...c2v(v,e));
+  if(currentTool==='fill'){saveUndo();fillSlice(v);redrawAll();return;}
+  if(currentTool==='sphere'){saveUndo();paintSphere(...crosshair,brushSize);redrawAll();return;}
+  drawing=true;saveUndo();applyBrush(...crosshair,v);redrawAll();
+}
+function onMove(v,e){if(!drawing)return;crosshair=clampCH(...c2v(v,e));applyBrush(...crosshair,v);redrawAll();}
+function changeSlice(v,d){switch(v){case'axial':crosshair[2]=Math.max(0,Math.min(bgNii.nz-1,crosshair[2]+d));break;case'coronal':crosshair[1]=Math.max(0,Math.min(bgNii.ny-1,crosshair[1]+d));break;case'sagittal':crosshair[0]=Math.max(0,Math.min(bgNii.nx-1,crosshair[0]+d));break;}redrawAll();}
+
+// Check if a voxel is valid for ROI painting:
+// If overlay is loaded, voxel must be non-zero in the overlay.
+// If no overlay, voxel must be non-zero in the background.
+// Erasing always allowed.
+function voxelValid(x,y,z){
+  if(ovNii){
+    const v=getOv(x,y,z);
+    return !isNaN(v) && v!==0;
+  }
+  return getBg(x,y,z)!==0;
+}
+
+function applyBrush(cx,cy,cz,view){
+  const r=brushSize-1,lab=currentTool==='erase'?0:rois[activeROI].label;
+  const isErase=currentTool==='erase';
+  for(let di=-r;di<=r;di++)for(let dj=-r;dj<=r;dj++){
+    if(di*di+dj*dj>r*r+r)continue;
+    let x=cx,y=cy,z=cz;
+    switch(view){case'axial':x=cx+di;y=cy+dj;break;case'coronal':x=cx+di;z=cz+dj;break;case'sagittal':y=cy+di;z=cz+dj;break;}
+    if(isErase||voxelValid(x,y,z)) setROI(x,y,z,lab);
+  }
+}
+function paintSphere(cx,cy,cz,rad){
+  const lab=rois[activeROI].label;
+  for(let dz=-rad;dz<=rad;dz++)for(let dy=-rad;dy<=rad;dy++)for(let dx=-rad;dx<=rad;dx++)
+    if(dx*dx+dy*dy+dz*dz<=rad*rad&&voxelValid(cx+dx,cy+dy,cz+dz)) setROI(cx+dx,cy+dy,cz+dz,lab);
+}
+function fillSlice(v){
+  const lab=rois[activeROI].label;
+  switch(v){
+    case'axial':{const z=crosshair[2];for(let y=0;y<bgNii.ny;y++)for(let x=0;x<bgNii.nx;x++)if(voxelValid(x,y,z))setROI(x,y,z,lab);break;}
+    case'coronal':{const yy=crosshair[1];for(let z=0;z<bgNii.nz;z++)for(let x=0;x<bgNii.nx;x++)if(voxelValid(x,yy,z))setROI(x,yy,z,lab);break;}
+    case'sagittal':{const xx=crosshair[0];for(let z=0;z<bgNii.nz;z++)for(let y=0;y<bgNii.ny;y++)if(voxelValid(xx,y,z))setROI(xx,y,z,lab);break;}
+  }
+}
+
+// ==================== Undo ====================
+function saveUndo(){undoStack.push(new Uint8Array(roiData));if(undoStack.length>MAX_UNDO)undoStack.shift();document.getElementById('undoBtn').disabled=false;}
+function undoAction(){if(!undoStack.length)return;roiData=undoStack.pop();if(!undoStack.length)document.getElementById('undoBtn').disabled=true;redrawAll();}
+
+// ==================== ROI mgmt ====================
+function renderROIList(){
+  const el=document.getElementById('roiList');el.innerHTML='';
+  rois.forEach((roi,i)=>{const d=document.createElement('div');d.className='roi-item'+(i===activeROI?' active':'');
+    d.innerHTML=`<div class="roi-color" style="background:${roi.color}"></div><span class="roi-name">${roi.name}</span><span class="roi-count" id="rc${roi.label}">0</span>`;
+    d.onclick=()=>{activeROI=i;renderROIList();};el.appendChild(d);});
+  updateVoxCounts();
+}
+function addROI(){const nl=rois.length?Math.max(...rois.map(r=>r.label))+1:1;rois.push({name:'ROI-'+nl,label:nl,color:ROI_COLORS[(nl-1)%ROI_COLORS.length]});activeROI=rois.length-1;renderROIList();}
+function updateVoxCounts(){
+  if(!roiData)return;const ct={};rois.forEach(r=>ct[r.label]=0);let tot=0;
+  for(let i=0;i<roiData.length;i++)if(roiData[i]>0){tot++;if(ct[roiData[i]]!==undefined)ct[roiData[i]]++;}
+  rois.forEach(r=>{const e=document.getElementById('rc'+r.label);if(e)e.textContent=ct[r.label];});
+  document.getElementById('totalVoxels').textContent=tot+' vox';
+}
+function clearCurrentROI(){if(!roiData)return;saveUndo();const l=rois[activeROI].label;for(let i=0;i<roiData.length;i++)if(roiData[i]===l)roiData[i]=0;redrawAll();}
+function clearAllROIs(){if(!roiData)return;saveUndo();roiData.fill(0);redrawAll();}
+
+// ==================== UI ====================
+function setTool(t){currentTool=t;document.querySelectorAll('.tool-btn').forEach(b=>b.classList.toggle('active',b.dataset.tool===t));}
+function setOvCmap(c){ovCmap=c;document.querySelectorAll('.cmap-btn').forEach(b=>b.classList.toggle('active',b.dataset.cmap===c));redrawAll();}
+function updateInfo(){
+  if(!bgNii)return;const[x,y,z]=crosshair;
+  document.getElementById('crossCoord').textContent=`[${x}, ${y}, ${z}]`;
+  const bv=getBg(x,y,z),rv=getROI(x,y,z);
+  let rt=rv>0?' | ROI: '+(rois.find(r=>r.label===rv)?.name||rv):'';
+  document.getElementById('crossVal').textContent='BG: '+bv.toFixed(2)+rt;
+  document.getElementById('crossOvVal').textContent=ovNii?'Overlay: '+getOv(x,y,z).toFixed(4):'';
+}
+function setStatus(m){document.getElementById('statusMsg').textContent=m;}
+function hex2rgb(h){return{r:parseInt(h.slice(1,3),16),g:parseInt(h.slice(3,5),16),b:parseInt(h.slice(5,7),16)};}
+
+// ==================== Export ====================
+function exportROI(){
+  if(!bgNii||!roiData)return;setStatus('Exporting ROI...');
+  const hs=bgNii.vox_offset,buf=new ArrayBuffer(hs+bgNii.nvox),arr=new Uint8Array(buf);
+  arr.set(bgNii.headerBytes);const dv=new DataView(buf),le=bgNii.littleEndian;
+  dv.setInt16(70,2,le);dv.setInt16(72,8,le);dv.setFloat32(112,1,le);dv.setFloat32(116,0,le);dv.setInt16(40,3,le);
+  arr.set(roiData,hs);
+  const c=pako.gzip(arr),bl=new Blob([c],{type:'application/gzip'}),a=document.createElement('a');
+  a.href=URL.createObjectURL(bl);a.download='custom_roi.nii.gz';a.click();URL.revokeObjectURL(a.href);
+  setStatus('ROI exported as custom_roi.nii.gz');
+}
+
+document.addEventListener('keydown',e=>{if(e.ctrlKey&&e.key==='z'){e.preventDefault();undoAction();}});
+window.addEventListener('resize',()=>{if(bgNii)setupCanvases();redrawAll();});
+renderROIList();
+</script>
+</body>
+</html>
